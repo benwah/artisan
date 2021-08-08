@@ -1,12 +1,9 @@
 # -*- coding: utf-8 -*-
 
-from artisanlib import __version__
-from artisanlib import __revision__
-from artisanlib import __build__
-
-from artisanlib import __release_sponsor_name__
-from artisanlib import __release_sponsor_domain__
-from artisanlib import __release_sponsor_url__
+from artisanlib import (
+    __version__, __revision__, __build__, __release_sponsor_name__,
+    __release_sponsor_domain__, __release_sponsor_url__, pyqtversion
+    )
 
 # ABOUT
 # This program shows how to plot the temperature and its rate of change from a
@@ -68,13 +65,6 @@ except:
 ## MONKEY PATCH END:
 
 import prettytable  # @UnresolvedImport
-
-#try:
-#    from PyQt6.QtCore import QLibraryInfo  # @UnusedImport @UnresolvedImport
-#    pyqtversion = 6
-#except Exception as e:
-#    pyqtversion = 5
-pyqtversion = 5 # until MPL and all build tools fully support PyQt6 we run on PyQt5
 
 try: # activate support for hiDPI screens on Windows
     if str(platform.system()).startswith("Windows"):
@@ -219,7 +209,7 @@ from artisanlib.util import (appFrozen, stringp, uchr, d, encodeLocal, s2a, fill
         fromFtoC, fromCtoF, RoRfromFtoC, RoRfromCtoF, convertRoR, convertTemp, path2url, toInt, toString, toList, toFloat,
         toBool, toStringList, toMap, removeAll)
 from artisanlib.qtsingleapplication import QtSingleApplication
-
+from artisanlib.artisan import Artisan
 
 from Phidget22.Phidget import Phidget as PhidgetDriver
 from Phidget22.Devices.TemperatureSensor import TemperatureSensor as PhidgetTemperatureSensor
@@ -233,282 +223,6 @@ except:
     pass
 
 platf = str(platform.system())
-
-
-#######################################################################################
-#################### Main Application  ################################################
-#######################################################################################
-
-appGuid = '9068bd2fa8e54945a6be1f1a0a589e92'
-viewerAppGuid = '9068bd2fa8e54945a6be1f1a0a589e93'
-
-class Artisan(QtSingleApplication):
-    def __init__(self, args):
-        super(Artisan, self).__init__(appGuid,viewerAppGuid,args)
-
-        self.sentToBackground = None # set to timestamp on putting app to background without any open dialog
-        self.plus_sync_cache_expiration = 1*60 # how long a plus sync is valid in seconds
-
-        if multiprocessing.current_process().name == 'MainProcess' and self.isRunning():
-            self.artisanviewerMode = True
-            if not platf=="Windows" and self.isRunningViewer(): sys.exit(0) # there is already one ArtisanViewer running, we terminate
-        else:
-            self.artisanviewerMode = False
-        self.messageReceived.connect(self.receiveMessage)
-        self.focusChanged.connect(self.appRaised)
-
-    @pyqtSlot("QWidget*","QWidget*")
-    def appRaised(self,oldFocusWidget,newFocusWidget):
-        try:
-            if not sip.isdeleted(aw): # sip not supported on older PyQt versions (eg. RPi)
-                if oldFocusWidget is None and newFocusWidget is not None and aw is not None and aw.centralWidget() == newFocusWidget and self.sentToBackground is not None:
-                    #focus gained
-                    try:
-                        if aw is not None and aw.plus_account is not None and aw.qmc.roastUUID is not None and aw.curFile is not None and \
-                                libtime.time() - self.sentToBackground > self.plus_sync_cache_expiration:
-                            plus.sync.getUpdate(aw.qmc.roastUUID,aw.curFile)
-                    except:
-                        pass
-                    self.sentToBackground = None
-
-                elif oldFocusWidget is not None and newFocusWidget is None and aw is not None and aw.centralWidget() == oldFocusWidget:
-                    # focus released
-                    self.sentToBackground = libtime.time() # keep the timestamp on sending the app with the main window to background
-                else: # on raising another dialog/widget was open, reset timer
-                    self.sentToBackground = None
-        except:
-            pass
-
-    # takes a QUrl and interprets it as follows
-    # artisan://roast/<UUID>         : loads profile from path associated with the given roast <UUID>
-    # artisan://template/<UUID>      : loads background profile from path associated with the given roast <UUID>
-    # artisan://profile?url=<url>    : loads proflie from given URL
-    # file://<path>                  : loads file from path
-    #                                  if query is "background" Artisan is not raised to the foreground
-    #                                  if query is "template" and the file has an .alog extension, the profile is loaded as background profile
-    def open_url(self, url):
-        if not aw.qmc.flagon and not aw.qmc.designerflag and not aw.qmc.wheelflag and aw.qmc.flavorchart_plot is None: # only if not yet monitoring
-            if url.scheme() == "artisan" and url.authority() in ['roast','template']:
-                # we try to resolve this one into a file URL and recurse
-                roast_UUID = url.toString(QUrl.RemoveScheme | QUrl.RemoveAuthority | QUrl.RemoveQuery | QUrl.RemoveFragment | QUrl.StripTrailingSlash)[1:]
-                if aw.qmc.roastUUID is None or aw.qmc.roastUUID != roast_UUID:
-                    # not yet open, lets try to find the path to that roastUUID and open it
-                    profile_path = plus.register.getPath(roast_UUID)
-                    if profile_path:
-                        aw.sendmessage(QApplication.translate("Message","URL open profile: {0}",None).format(profile_path))
-                        file_url = QUrl.fromLocalFile(profile_path)
-                        if url.authority() == 'template':
-                            file_url.setQuery("template")
-                        self.open_url(file_url)
-            elif url.scheme() == "artisan" and url.authority() == 'profile' and url.hasQuery():
-                try:
-                    query = QUrlQuery(url.query())
-                    if query.hasQueryItem("url"):
-                        QTimer.singleShot(5,lambda: aw.importExternalURL(aw.artisanURLextractor,url=QUrl(query.queryItemValue("url"))))
-                except Exception:
-#                    import traceback
-#                    traceback.print_exc(file=sys.stdout)
-                    pass
-            elif url.scheme() == "file":
-                aw.sendmessage(QApplication.translate("Message","URL open profile: {0}",None).format(url.toDisplayString()))
-                url_query = None
-                if url.hasQuery():
-                    url_query = url.query()
-                if url_query is None or url_query != "background":
-                    # by default we raise Artisan to the foreground
-                    QTimer.singleShot(20,lambda: self.activateWindow())
-                url.setQuery(None) # remove any query to get a valid file path
-                url.setFragment(None) # remove also any potential fragment
-                filename = url.toString(QUrl.PreferLocalFile)
-                qfile = QFileInfo(filename)
-                file_suffix = qfile.suffix()
-                if file_suffix == "alog":
-                    if bool(aw.comparator):
-                        # add Artisan profile to the comparator selection
-                        QTimer.singleShot(20,lambda : aw.comparator.addProfiles([filename]))
-                    else:
-                        # load Artisan profile on double-click on *.alog file
-                        if url_query is not None and url_query == "template":
-                            aw.loadBackgroundSignal.emit(filename)
-                        else:
-                            QTimer.singleShot(20,lambda : aw.loadFile(filename))
-                elif file_suffix == "alrm":
-                    # load Artisan alarms on double-click on *.alrm file
-                    QTimer.singleShot(20,lambda : aw.loadAlarms(filename))
-                elif file_suffix == "apal":
-                    # load Artisan palettes on double-click on *.apal file
-                    QTimer.singleShot(20,lambda : aw.getPalettes(filename,aw.buttonpalette))
-
-        elif platf == "Windows" and not self.artisanviewerMode:
-            msg = url.toString()  #here we don't want a local file, preserve the windows file:///
-            self.sendMessage2ArtisanInstance(msg,self._viewer_id)
-
-    @pyqtSlot(str)
-    def receiveMessage(self,msg):
-        url = QUrl()
-        url.setUrl(msg)
-        self.open_url(url)
-
-    # to send message to main Artisan instance: id = appGuid
-    # to send message to viewer:                id = viewerAppGuid
-    def sendMessage2ArtisanInstance(self,message,instance_id):
-        if platf == "Windows":
-            try:
-                if instance_id == self._viewer_id:
-                    res = self._sendMessage2ArtisanInstance(message,self._viewer_id)
-                elif instance_id == self._id:
-                    res = self._sendMessage2ArtisanInstance(message,self._id)
-                if not res:
-                    # get the path of the artisan.exe file
-                    if getattr(sys, 'frozen', False):
-                        application_path = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
-                        application_path += "\\artisan.exe"
-                    # or the artisan py file if running from source
-                    else:
-                        application_path = sys.argv[0]
-                    application_path = re.sub(r"\\",r"/",application_path)
-                    # must start viewer without an argv else it thinks it was started from a link and sends back to artisan
-                    os.startfile(application_path)  # @UndefinedVariable
-                    QTimer.singleShot(3000,lambda : self._sendMessage2ArtisanInstance(message,instance_id))
-            except:
-                pass
-        else:
-            self._sendMessage2ArtisanInstance(message,instance_id)
-
-    def _sendMessage2ArtisanInstance(self,message,instance_id):
-        try:
-            self._outSocket = QLocalSocket()
-            self._outSocket.connectToServer(instance_id)
-            self._isRunning = self._outSocket.waitForConnected(-1)
-            if self.isRunning():
-                self._outStream = QTextStream(self._outSocket)
-                self._outStream.setCodec('UTF-8')
-                return self.sendMessage(message)
-            else:
-                return False
-        finally:
-            self._outSocket = None
-            self._outStream = None
-
-    def event(self, event):
-        if event.type() == QEvent.FileOpen:
-            try:
-                url = event.url()
-                # files cannot be opend while
-                # - sampling
-                # - in Designer mode
-                # - in Wheel graph mode
-                # - while editing the cup profile
-                can_open_mode = not aw.qmc.flagon and not aw.qmc.designerflag and not aw.qmc.wheelflag and aw.qmc.flavorchart_plot is None
-                if can_open_mode and bool(aw.comparator):
-                    # while in comparator mode with the events file already open we rather send it to another instance
-                    filename = url.toString(QUrl.PreferLocalFile)
-                    can_open_mode = not any(p.filepath == filename for p in aw.comparator.profiles)
-                if can_open_mode:
-                    self.open_url(url)
-                else:
-                    message = url.toString()
-                    # we send open file in the other instance if running
-                    if self.artisanviewerMode:
-                        # this is the Viewer, but we cannot open the file, send an open request to the main app if it is running
-                        self.sendMessage2ArtisanInstance(message,self._id)
-                    else:
-                        # try to open the file in Viewer if it is running
-                        self.sendMessage2ArtisanInstance(message,self._viewer_id)
-            except:
-                pass
-            return 1
-        else:
-            return super(Artisan, self).event(event)
-
-# configure multiprocessing
-if sys.platform.startswith("darwin"):
-    try:
-        # start method can only be set once!
-        if False and "forkserver" in multiprocessing.get_all_start_methods():
-            # singed app with forkserver option fails with a MemoryError
-            multiprocessing.set_start_method('forkserver') # only available on Python3 on Unix, currently (Python 3.8) not supported by frozen executables generated with pyinstaller
-        elif "fork" in multiprocessing.get_all_start_methods():
-            multiprocessing.set_start_method('fork') # default on Python3.7 for macOS (and on Unix also under Python3.8), but considered unsafe, 
-            # not available on Windows, on Python3.8 we have to explicitly set this
-            # https://bugs.python.org/issue33725
-            # this is the only option that works (Hottop communication & WebLCDs) in signed macOS apps
-#        if "spawn" in multiprocessing.get_all_start_methods():
-#            multiprocessing.set_start_method('spawn') # default on Python3.8 for macOS (always default on Windows) 
-#            # this breaks on starting WebLCDs in macOS (and linux) builds with py2app, pyinstaller
-#            # https://bugs.python.org/issue32146
-#            # https://github.com/pyinstaller/pyinstaller/issues/4865
-    except:
-        pass
-
-args = sys.argv
-if sys.platform.startswith("linux"):
-    # avoid a GTK bug in Ubuntu Unity
-    args = args + ['-style','Fusion']
-#if platf == 'Windows':
-#    # highDPI support must be set before creating the Application instance
-#    try:
-#        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling)
-#        QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps)
-#    except Exception as e:
-#        pass
-app = Artisan(args)
-
-# On the first run if there are legacy settings under "YourQuest" but no new settings under "artisan-scope" then the legacy settings
-# will be copied to the new settings location. Once settings exist under "artisan-scope" the legacy settings under "YourQuest" will
-# no longer be read or saved.  At start-up, versions of Artisan before to v2.0 will no longer share settings with versions v2.0 and after.
-# Settings can be shared among all versions of Artisan by explicitly saving and loading them using Help>Save/Load Settings.
-try:
-    app.setApplicationName("Artisan")                                       #needed by QSettings() to store windows geometry in operating system
-
-    app.setOrganizationName("YourQuest")                                    #needed by QSettings() to store windows geometry in operating system
-    app.setOrganizationDomain("p.code.google.com")                          #needed by QSettings() to store windows geometry in operating system
-    legacysettings = QSettings()
-    app.setOrganizationName("artisan-scope")                                #needed by QSettings() to store windows geometry in operating system
-    app.setOrganizationDomain("artisan-scope.org")                          #needed by QSettings() to store windows geometry in operating system
-    newsettings = QSettings()
-
-    settingsRelocated = False
-    # copy settings from legacy to new if newsettings do not exist, legacysettings do exist, and were not previously copied
-#    if not newsettings.contains("Mode") and legacysettings.contains("Mode") and not legacysettings.contains("_settingsCopied"):
-    if not newsettings.contains("Mode") and legacysettings.contains("Mode") and not legacysettings.value("_settingsCopied") == 1:
-        settingsRelocated = True
-        # copy Artisan settings
-        for key in legacysettings.allKeys():
-            newsettings.setValue(key,legacysettings.value(key))
-        legacysettings.setValue("_settingsCopied", 1)  # prevents copying again in the future, this key not cleared by a Factory Reset
-
-        # copy ArtisanViewer settings
-        app.setApplicationName("ArtisanViewer")                                       #needed by QSettings() to store windows geometry in operating system
-
-        app.setOrganizationName("YourQuest")                                    #needed by QSettings() to store windows geometry in operating system
-        app.setOrganizationDomain("p.code.google.com")                          #needed by QSettings() to store windows geometry in operating system
-        legacysettings = QSettings()
-        app.setOrganizationName("artisan-scope")                                #needed by QSettings() to store windows geometry in operating system
-        app.setOrganizationDomain("artisan-scope.org")                          #needed by QSettings() to store windows geometry in operating system
-        newsettings = QSettings()
-        for key in legacysettings.allKeys():
-            newsettings.setValue(key,legacysettings.value(key))
-    del legacysettings   #free up memmory?
-    del newsettings      #free up memmory?
-except:
-    pass
-
-app.setApplicationName("Artisan")                                       #needed by QSettings() to store windows geometry in operating system
-app.setOrganizationName("artisan-scope")                                #needed by QSettings() to store windows geometry in operating system
-app.setOrganizationDomain("artisan-scope.org")                          #needed by QSettings() to store windows geometry in operating system
-#app.setOrganizationName("YourQuest")                                   #needed by QSettings() to store windows geometry in operating system
-#app.setOrganizationDomain("p.code.google.com")                          #needed by QSettings() to store windows geometry in operating system
-
-if platf == 'Windows':
-    app.setWindowIcon(QIcon("artisan.png"))
-#    try:
-#        # activate scaling for hiDPI screen support on Windows
-#        app.setAttribute(Qt.AA_EnableHighDpiScaling)
-#        if hasattr(QStyleFactory, 'AA_UseHighDpiPixmaps'):
-#            app.setAttribute(Qt.AA_UseHighDpiPixmaps)
-#    except Exception as e:
-#        pass
 
 
 
@@ -555,7 +269,6 @@ def __dependencies_for_freezing():
     from gevent import signal, core, resolver_thread, resolver_ares, socket, threadpool, thread, threading, select, subprocess, pywsgi, server, hub # @UnusedImport @Reimport
 
 del __dependencies_for_freezing
-
 
 
 def QDateTimeToEpoch(datetime):
@@ -15382,8 +15095,6 @@ class MyQDoubleValidator(QDoubleValidator):
 
 
 class ApplicationWindow(QMainWindow):
-    global app
-
     singleShotPhidgetsPulseOFF = pyqtSignal(int,int,str) # signal to be called from the eventaction thread to realise Phidgets pulse via QTimer in the main thread
     singleShotPhidgetsPulseOFFSerial = pyqtSignal(int,int,str,str)
 #PLUS
@@ -15401,10 +15112,11 @@ class ApplicationWindow(QMainWindow):
     updateSerialLogSignal = pyqtSignal()
     fireslideractionSignal = pyqtSignal(int)
 
-    def __init__(self, parent = None, *, locale):
+    def __init__(self, parent = None, *, app, locale, settingsRelocated, artisanviewerFirstStart):
 
         self.locale = locale
         self.app = app
+        self.locale = locale
         self.superusermode = False
 
 #PLUS
@@ -15544,7 +15256,8 @@ class ApplicationWindow(QMainWindow):
             except:
                 pass
 
-        self.qmc = tgraphcanvas(self.main_widget, self.dpi, locale=locale)
+        self.qmc = tgraphcanvas(self.main_widget, self.dpi, locale=self.locale)
+
         self.qmc.setMinimumHeight(150)
 
         #self.qmc.setAttribute(Qt.WA_NoSystemBackground)
@@ -16205,7 +15918,8 @@ class ApplicationWindow(QMainWindow):
         self.EnglishLanguage.setCheckable(True)
         self.EnglishLanguage.triggered.connect(self.changelocale_en)
         self.languageMenu.addAction(self.EnglishLanguage)
-        if self.locale == "en" or locale == "en_US":
+
+        if self.locale == "en" or self.locale == "en_US":
             self.EnglishLanguage.setChecked(True)
 
         self.SpanishLanguage = QAction(UIconst.CONF_MENU_SPANISH,self)
@@ -16545,7 +16259,7 @@ class ApplicationWindow(QMainWindow):
             self.viewMenu.addAction(self.fullscreenAction)
 
         # HELP menu
-        if app.artisanviewerMode:
+        if self.app.artisanviewerMode:
             helpAboutAction = QAction(UIconst.HELP_MENU_ABOUT_ARTISANVIEWER,self)
         else:
             helpAboutAction = QAction(UIconst.HELP_MENU_ABOUT,self)
@@ -17347,7 +17061,7 @@ class ApplicationWindow(QMainWindow):
         self.button_1.setCursor(QCursor(Qt.PointingHandCursor))
         self.button_1.setMinimumHeight(self.standard_button_height)
         self.button_1.clicked.connect(self.qmc.ToggleMonitor)
-        if app.artisanviewerMode:
+        if self.app.artisanviewerMode:
             self.button_1.setVisible(False)
 
         #create START/STOP buttons
@@ -17365,7 +17079,7 @@ class ApplicationWindow(QMainWindow):
 
         self.button_2.setMinimumHeight(self.standard_button_height)
         self.button_2.clicked.connect(self.qmc.ToggleRecorder)
-        if app.artisanviewerMode:
+        if self.app.artisanviewerMode:
             self.button_2.setVisible(False)
 
         #create 1C START, 1C END, 2C START and 2C END buttons
@@ -17447,7 +17161,7 @@ class ApplicationWindow(QMainWindow):
         self.button_10.setCursor(QCursor(Qt.PointingHandCursor))
         self.button_10.setMinimumHeight(self.standard_button_height)
         self.button_10.clicked.connect(self.PIDcontrol)
-        if app.artisanviewerMode:
+        if self.app.artisanviewerMode:
             self.button_10.setVisible(False)
 
         #create EVENT record button
@@ -17525,7 +17239,7 @@ class ApplicationWindow(QMainWindow):
         self.button_18.setCursor(QCursor(Qt.PointingHandCursor))
         if not self.qmc.HUDbuttonflag:
             self.button_18.setVisible(False)
-        if app.artisanviewerMode:
+        if self.app.artisanviewerMode:
             self.button_18.setVisible(False)
 
         #create DRY button
@@ -18271,7 +17985,7 @@ class ApplicationWindow(QMainWindow):
         # this variable is bound to the Roast Properties dialog if it is open, set to False to block opening the dialog or None otherwise
         self.editgraphdialog = None
 
-#        # provide information message to user about sharing settings at start-up
+        # provide information message to user about sharing settings at start-up
         if settingsRelocated:
             string =  QApplication.translate("Message","Welcome to version {0} of Artisan!", None).format(__version__) + "\n\n"
             string += QApplication.translate("Message","This is a one time message to inform you about a change in Artisan.", None) + "\n\n"
@@ -18323,7 +18037,7 @@ class ApplicationWindow(QMainWindow):
 
     def updateWindowTitle(self):
         try:
-            if app.artisanviewerMode:
+            if self.app.artisanviewerMode:
                 appTitle = "ArtisanViewer %s"%str(__version__)
             else:
                 appTitle = "Artisan %s"%str(__version__)
@@ -18416,7 +18130,7 @@ class ApplicationWindow(QMainWindow):
     def dropEvent(self, event):
         urls = event.mimeData().urls()
         if urls and len(urls)>0:
-            app.open_url(urls[0])
+            self.app.open_url(urls[0])
 
     def showHelpDialog(self,parent,dialog,title,content):
         try: # sip not supported on older PyQt versions (RPi!)
@@ -20074,7 +19788,7 @@ class ApplicationWindow(QMainWindow):
         else:
             aw.pidcontrol.activateONOFFeasySV(False)
             aw.pidcontrol.activateSVSlider(False)
-        if app.artisanviewerMode:
+        if self.app.artisanviewerMode:
             aw.button_10.setVisible(False)
         else:
             aw.button_10.setVisible(res)
@@ -23314,7 +23028,7 @@ class ApplicationWindow(QMainWindow):
     @pyqtSlot()
     @pyqtSlot(bool)
     def resetApplication(self,_=False):
-        if app.artisanviewerMode:
+        if self.app.artisanviewerMode:
             string = QApplication.translate("Message","Do you want to reset all settings?<br> ArtisanViewer has to be restarted!", None)
         else:
             string = QApplication.translate("Message","Do you want to reset all settings?<br> Artisan has to be restarted!", None)
@@ -23331,7 +23045,7 @@ class ApplicationWindow(QMainWindow):
     @pyqtSlot(bool)
     def on_actionCut_triggered(self,_=False):
         try:
-            app.activeWindow().focusWidget().cut()
+            self.app.activeWindow().focusWidget().cut()
         except Exception:
             pass
 
@@ -23339,7 +23053,7 @@ class ApplicationWindow(QMainWindow):
     @pyqtSlot(bool)
     def on_actionCopy_triggered(self,_=False):
         try:
-            app.activeWindow().focusWidget().copy()
+            self.app.activeWindow().focusWidget().copy()
         except Exception:
             pass
 
@@ -23347,7 +23061,7 @@ class ApplicationWindow(QMainWindow):
     @pyqtSlot(bool)
     def on_actionPaste_triggered(self,_=False):
         try:
-            app.activeWindow().focusWidget().paste()
+            self.app.activeWindow().focusWidget().paste()
         except Exception:
             pass
 
@@ -23410,7 +23124,7 @@ class ApplicationWindow(QMainWindow):
             self.showExtraButtons(False)
         else:
             self.hideExtraButtons(False)
-        if app.artisanviewerMode:
+        if self.app.artisanviewerMode:
             self.hideExtraButtons(True)
 
     def hideExtraButtons(self,changeDefault=True):
@@ -23464,7 +23178,7 @@ class ApplicationWindow(QMainWindow):
             self.showSliders(False)
         else:
             self.hideSliders(False)
-        if app.artisanviewerMode:
+        if self.app.artisanviewerMode:
             self.hideSliders(True)
 
     def hideSliders(self,changeDefault=True):
@@ -23621,7 +23335,7 @@ class ApplicationWindow(QMainWindow):
             self.showLCDs(False)
         else:
             self.hideLCDs(False)
-        if app.artisanviewerMode:
+        if self.app.artisanviewerMode:
             self.hideLCDs(True)
 
     def hideEventsMinieditor(self):
@@ -23817,7 +23531,7 @@ class ApplicationWindow(QMainWindow):
         self.displayonlymenus()
 
     def displayonlymenus(self):
-        if app.artisanviewerMode:
+        if self.app.artisanviewerMode:
             self.newRoastMenu.setEnabled(False)
 #            self.deviceAction.setEnabled(False)
 #            self.commportAction.setEnabled(False)
@@ -23968,7 +23682,7 @@ class ApplicationWindow(QMainWindow):
                     aw.clearMessageLine()
                     macfullscreen = False
                     try:
-                        if platf == 'Darwin' and app.allWindows()[0].visibility() == QWindow.FullScreen:
+                        if platf == 'Darwin' and self.app.allWindows()[0].visibility() == QWindow.FullScreen:
                             macfullscreen = True
                     except:
                         pass
@@ -23979,7 +23693,7 @@ class ApplicationWindow(QMainWindow):
                         self.showNormal()
                         try:
                             if macfullscreen and platf == 'Darwin':
-                                app.allWindows()[0].setVisibility(QWindow.Windowed)
+                                self.app.allWindows()[0].setVisibility(QWindow.Windowed)
                         except:
                             pass
                     else:
@@ -24025,7 +23739,7 @@ class ApplicationWindow(QMainWindow):
                         self.qmc.backmoveflag = 0 # do not align background automatically during redraw!
                         aw.qmc.redraw(recomputeAllDeltas=False,sampling=aw.qmc.flagon)
                 elif key == 65:                     #letter A (automatic save)
-                    if not app.artisanviewerMode and self.qmc.flagon:
+                    if not self.app.artisanviewerMode and self.qmc.flagon:
                         self.automaticsave()
                 elif key == 68:                     #letter D (toggle xy between temp and RoR scale)
                     self.qmc.fmt_data_RoR = not (self.qmc.fmt_data_RoR)
@@ -24038,10 +23752,10 @@ class ApplicationWindow(QMainWindow):
                 elif key == 67:                     #letter C (controls)
                     self.toggleControls()
                 elif key == 88:                     #letter X (readings)
-                    if not app.artisanviewerMode:
+                    if not self.app.artisanviewerMode:
                         self.toggleReadings()
                 elif key == 83:                     #letter S (sliders)
-                    if not app.artisanviewerMode:
+                    if not self.app.artisanviewerMode:
                         self.toggleSliders()
                 elif key == 84 and not self.qmc.flagon:  #letter T (mouse cross)
                     self.qmc.togglecrosslines()
@@ -24061,14 +23775,14 @@ class ApplicationWindow(QMainWindow):
                     self.quickEventShortCut = (4,"")
                     aw.sendmessage("SV")
                 elif key == 66:  #letter b hides/shows extra rows of event buttons
-                    if not app.artisanviewerMode:
+                    if not self.app.artisanviewerMode:
                         self.toggleextraeventrows()
                 elif key == 77:  #letter m hides/shows standard buttons row
                     if aw.qmc.flagstart:
                         self.standardButtonsVisibility()
                 #Extra event buttons palette. Numerical keys [0,1,2,3,4,5,6,7,8,9]
                 elif key > 47 and key < 58:
-                    if not app.artisanviewerMode:
+                    if not self.app.artisanviewerMode:
                         button = [48,49,50,51,52,53,54,55,56,57]
                         if self.quickEventShortCut:
                             # quick custom event entry
@@ -28264,7 +27978,7 @@ class ApplicationWindow(QMainWindow):
                     aw.qmc.adderror(QApplication.translate("Error Message","Exception: {} not a valid settings file",None).format(str(filename)))
                     return False
             
-                if aw.qmc.neverUpdateBatchCounter or app.artisanviewerMode:
+                if aw.qmc.neverUpdateBatchCounter or self.app.artisanviewerMode:
                     updateBatchCounter = False
                 else:
                     settings.beginGroup("Batch")
@@ -29210,7 +28924,7 @@ class ApplicationWindow(QMainWindow):
                     aw.button_18.setVisible(True)
                 else:
                     aw.button_18.setVisible(False)
-            if app.artisanviewerMode:
+            if self.app.artisanviewerMode:
                 aw.button_18.setVisible(False)
             settings.endGroup()
             settings.beginGroup("Style")
@@ -29614,7 +29328,7 @@ class ApplicationWindow(QMainWindow):
             settings.endGroup()
             self.qmc.adjustTempSliders() # adjust min/max slider limits of temperature sliders to correspond to the current temp mode
             aw.slidersAction.setEnabled(any(aw.eventslidervisibilities) or aw.pidcontrol.svSlider)
-            if app.artisanviewerMode:
+            if self.app.artisanviewerMode:
                 aw.slidersAction.setEnabled(False)
             #restore quantifier
             settings.beginGroup("Quantifiers")
@@ -29818,6 +29532,7 @@ class ApplicationWindow(QMainWindow):
             res = True
 
         except Exception:
+            raise
             res = False
 #            import traceback
 #            traceback.print_exc(file=sys.stdout)
@@ -29838,7 +29553,7 @@ class ApplicationWindow(QMainWindow):
                 try:
                     available = list(map(str, list(QStyleFactory.keys())))
                     i = list(map(lambda x:x.lower(),available)).index(toString(settings.value("appearance")))
-                    app.setStyle(available[i])
+                    self.app.setStyle(available[i])
                     aw.appearance = available[i].lower()
                 except Exception:
                     pass
@@ -29897,7 +29612,7 @@ class ApplicationWindow(QMainWindow):
 
     def startWebLCDs(self,force=False):
         try:
-            if not app.artisanviewerMode and not self.WebLCDs or force:
+            if not self.app.artisanviewerMode and not self.WebLCDs or force:
                 from artisanlib.weblcds import startWeb
                 res = startWeb(
                     self.WebLCDsPort,
@@ -33999,7 +33714,7 @@ class ApplicationWindow(QMainWindow):
         build = ""
         if __build__ != "0":
             build = " build " + __build__
-        if app.artisanviewerMode:
+        if self.app.artisanviewerMode:
             name = "ArtisanViewer"
         else:
             name = "Artisan"
@@ -36319,7 +36034,7 @@ class ApplicationWindow(QMainWindow):
             self.e4buttonbarLayout.insertStretch(self.e4buttonbarLayout.count())
         self.settooltip()
         aw.buttonsAction.setEnabled(bool(len(aw.extraeventslabels) > 0))
-        if app.artisanviewerMode:
+        if self.app.artisanviewerMode:
             aw.buttonsAction.setEnabled(False)
         self.update_extraeventbuttons_visibility()
 
@@ -37390,7 +37105,100 @@ def initialize_locale(app):
     if locale is None or len(locale) == 0:
         locale = "en"
 
+    return locale
+
+
+def initialize_app(*, locale):
+    # configure multiprocessing
+    if sys.platform.startswith("darwin"):
+        try:
+            # start method can only be set once!
+            if False and "forkserver" in multiprocessing.get_all_start_methods():
+                # singed app with forkserver option fails with a MemoryError
+                multiprocessing.set_start_method('forkserver') # only available on Python3 on Unix, currently (Python 3.8) not supported by frozen executables generated with pyinstaller
+            elif "fork" in multiprocessing.get_all_start_methods():
+                multiprocessing.set_start_method('fork') # default on Python3.7 for macOS (and on Unix also under Python3.8), but considered unsafe, 
+                # not available on Windows, on Python3.8 we have to explicitly set this
+                # https://bugs.python.org/issue33725
+                # this is the only option that works (Hottop communication & WebLCDs) in signed macOS apps
+    #        if "spawn" in multiprocessing.get_all_start_methods():
+    #            multiprocessing.set_start_method('spawn') # default on Python3.8 for macOS (always default on Windows) 
+    #            # this breaks on starting WebLCDs in macOS (and linux) builds with py2app, pyinstaller
+    #            # https://bugs.python.org/issue32146
+    #            # https://github.com/pyinstaller/pyinstaller/issues/4865
+        except:
+            pass
+
+    args = sys.argv
+    if sys.platform.startswith("linux"):
+        # avoid a GTK bug in Ubuntu Unity
+        args = args + ['-style','Fusion']
+    #if platf == 'Windows':
+    #    # highDPI support must be set before creating the Application instance
+    #    try:
+    #        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling)
+    #        QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps)
+    #    except Exception as e:
+    #        pass
+    app = Artisan(args)
+
+    # On the first run if there are legacy settings under "YourQuest" but no new settings under "artisan-scope" then the legacy settings
+    # will be copied to the new settings location. Once settings exist under "artisan-scope" the legacy settings under "YourQuest" will
+    # no longer be read or saved.  At start-up, versions of Artisan before to v2.0 will no longer share settings with versions v2.0 and after.
+    # Settings can be shared among all versions of Artisan by explicitly saving and loading them using Help>Save/Load Settings.
+    try:
+        app.setApplicationName("Artisan")                                       #needed by QSettings() to store windows geometry in operating system
+
+        app.setOrganizationName("YourQuest")                                    #needed by QSettings() to store windows geometry in operating system
+        app.setOrganizationDomain("p.code.google.com")                          #needed by QSettings() to store windows geometry in operating system
+        legacysettings = QSettings()
+        app.setOrganizationName("artisan-scope")                                #needed by QSettings() to store windows geometry in operating system
+        app.setOrganizationDomain("artisan-scope.org")                          #needed by QSettings() to store windows geometry in operating system
+        newsettings = QSettings()
+
+        settingsRelocated = False
+        # copy settings from legacy to new if newsettings do not exist, legacysettings do exist, and were not previously copied
+    #    if not newsettings.contains("Mode") and legacysettings.contains("Mode") and not legacysettings.contains("_settingsCopied"):
+        if not newsettings.contains("Mode") and legacysettings.contains("Mode") and not legacysettings.value("_settingsCopied") == 1:
+            settingsRelocated = True
+            # copy Artisan settings
+            for key in legacysettings.allKeys():
+                newsettings.setValue(key,legacysettings.value(key))
+            legacysettings.setValue("_settingsCopied", 1)  # prevents copying again in the future, this key not cleared by a Factory Reset
+
+            # copy ArtisanViewer settings
+            app.setApplicationName("ArtisanViewer")                                       #needed by QSettings() to store windows geometry in operating system
+
+            app.setOrganizationName("YourQuest")                                    #needed by QSettings() to store windows geometry in operating system
+            app.setOrganizationDomain("p.code.google.com")                          #needed by QSettings() to store windows geometry in operating system
+            legacysettings = QSettings()
+            app.setOrganizationName("artisan-scope")                                #needed by QSettings() to store windows geometry in operating system
+            app.setOrganizationDomain("artisan-scope.org")                          #needed by QSettings() to store windows geometry in operating system
+            newsettings = QSettings()
+            for key in legacysettings.allKeys():
+                newsettings.setValue(key,legacysettings.value(key))
+        del legacysettings   #free up memmory?
+        del newsettings      #free up memmory?
+    except:
+        pass
+
+    app.setApplicationName("Artisan")                                       #needed by QSettings() to store windows geometry in operating system
+    app.setOrganizationName("artisan-scope")                                #needed by QSettings() to store windows geometry in operating system
+    app.setOrganizationDomain("artisan-scope.org")                          #needed by QSettings() to store windows geometry in operating system
+    #app.setOrganizationName("YourQuest")                                   #needed by QSettings() to store windows geometry in operating system
+    #app.setOrganizationDomain("p.code.google.com")                          #needed by QSettings() to store windows geometry in operating system
+
+    if platf == 'Windows':
+        app.setWindowIcon(QIcon("artisan.png"))
+    #    try:
+    #        # activate scaling for hiDPI screen support on Windows
+    #        app.setAttribute(Qt.AA_EnableHighDpiScaling)
+    #        if hasattr(QStyleFactory, 'AA_UseHighDpiPixmaps'):
+    #            app.setAttribute(Qt.AA_UseHighDpiPixmaps)
+    #    except Exception as e:
+    #        pass
     #load Qt default translations from QLibrary
+
     qtTranslator = QTranslator()
     if qtTranslator.load("qtbase_" + locale, QLibraryInfo.location(QLibraryInfo.TranslationsPath)):
         app.installTranslator(qtTranslator)
@@ -37416,13 +37224,11 @@ def initialize_locale(app):
     elif appTranslator.load("artisan_" + locale, QApplication.applicationDirPath() + "/../translations"):
         app.installTranslator(appTranslator)
 
-    return locale
+    return app, settingsRelocated
 
 
 def main():
     global aw
-    global app
-    global artisanviewerFirstStart
 
     locale = initialize_locale(app)
 
@@ -37431,6 +37237,8 @@ def main():
 
     # suppress all warnings
     warnings.filterwarnings('ignore')
+
+    app, settingsRelocated = initialize_app(locale=locale)
 
     artisanviewerFirstStart = False
     if app.artisanviewerMode:
@@ -37442,7 +37250,14 @@ def main():
 
     aw = None # this is to ensure that the variable aw is already defined during application initialization
 
-    aw = ApplicationWindow(locale=locale)
+    QSettings().setValue('locale', locale)
+
+    aw = ApplicationWindow(
+        app=app,
+        locale=locale,
+        artisanviewerFirstStart=artisanviewerFirstStart,
+        settingsRelocated=settingsRelocated
+    )
 
     app.setActivationWindow(aw,activateOnMessage=False) # set the activation window for the QtSingleApplication
 

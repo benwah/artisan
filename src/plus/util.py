@@ -37,19 +37,20 @@ from artisanlib.util import d as decode
 
 from plus import config
 
-# we set the app name temporary to "Artisan" to have ArtisanViewer using the same data location as Artisan
-app = QCoreApplication.instance()
-appName = app.applicationName()
-app.setApplicationName("Artisan")
-data_dir = QStandardPaths.standardLocations(QStandardPaths.AppLocalDataLocation)[0]
-app.setApplicationName(appName)
-
 ## Files
 
 # we store data in the user- and app-specific local default data directory for the platform
 # note that the path is based on the ApplicationName and OrganizationName setting of the app
 # eg. /Users/<username>/Library/Application Support/Artisan-Scope/Artisan on macOS
 def getDataDirectory():
+    # we set the app name temporary to "Artisan" to have ArtisanViewer using the same data location as Artisan
+    # app = QCoreApplication.instance()
+    # appName = app.applicationName()
+    # app.setApplicationName("Artisan")
+    # data_dir = QStandardPaths.standardLocations(QStandardPaths.AppLocalDataLocation)[0]
+    # app.setApplicationName(appName)
+    data_dir = '.'
+
     try:
         if not os.path.exists(data_dir):
             os.makedirs(data_dir)
@@ -61,9 +62,11 @@ def getDataDirectory():
 # if share is True, the same (cache) file is shared between the Artisan and ArtisanViewer apps
 # and locks have to be used to avoid race conditions
 def getDirectory(filename,ext=None,share=False):
+    # app = QCoreApplication.instance()
+    viewerMode = False
     fn = filename
     if not share:
-        if app.artisanviewerMode:
+        if viewerMode:
             fn = filename + "_viewer"
     fp = Path(getDataDirectory(),fn)
     if ext is not None:
