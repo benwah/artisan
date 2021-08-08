@@ -2136,7 +2136,7 @@ class tgraphcanvas(FigureCanvas):
     @pyqtSlot()
     def fileDirty(self):
         self.safesaveflag = True
-        aw.updateWindowTitle()
+        aw.UPDATEWINDOWTITLE()
 
     @pyqtSlot()
     def fileClean(self):
@@ -37043,7 +37043,7 @@ def qt_message_handler(msg_type, msg_log_context, msg_string):
     pass
 
 
-def initialize_locale(app):
+def initialize_locale():
     if QSettings().contains('resetqsettings') and not toInt(QSettings().value('resetqsettings')):
         locale = toString(QSettings().value('locale'))
         if locale is None or locale == "en_US":
@@ -37230,14 +37230,13 @@ def initialize_app(*, locale):
 def main():
     global aw
 
-    locale = initialize_locale(app)
-
     # supress all Qt messages
     qInstallMessageHandler(qt_message_handler)
 
     # suppress all warnings
     warnings.filterwarnings('ignore')
 
+    locale = initialize_locale()
     app, settingsRelocated = initialize_app(locale=locale)
 
     artisanviewerFirstStart = False
