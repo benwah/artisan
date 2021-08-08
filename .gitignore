@@ -15,3 +15,6 @@ src/.project
 src/.pydevproject
 src/artisan-mac-2.4.5-beta.dmg
 src/artisan-mac-2.4.5.dmg
+
+outbox
+*.log
